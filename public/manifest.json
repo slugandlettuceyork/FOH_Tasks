@@ -3,7 +3,12 @@
   "short_name": "FOH Tasks",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#141A1F",
-  "theme_color": "#141A1F",
-  "icons": []
+  "background_color": "#FFFFFF",
+  "theme_color": "#0F6E56",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
 }

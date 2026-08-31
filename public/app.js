@@ -4,13 +4,14 @@
    tab only (editing task lists, close-down list, order sheet, week anchor).
 */
 
+const APP_VERSION = '2026-08-31.1'; // shown in header; bump this on every deploy so it's obvious a change landed
+
 const DAY_NAMES = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'];
 const DAY_SHORT = {MONDAY:'Mon',TUESDAY:'Tue',WEDNESDAY:'Wed',THURSDAY:'Thu',FRIDAY:'Fri',SATURDAY:'Sat',SUNDAY:'Sun'};
 
 let CONFIG = null;          // { days, closedown, order, adminPin, weekAnchor }
 let selectedDate = startOfDay(new Date());   // date shown on "Today's Tasks" tab
 let taskState = null;       // state blob for selectedDate
-let closedownState = null;  // state blob for real "today"
 let orderEntries = null;    // persistent order-sheet entries
 let adminUnlocked = false;
 let sectionCollapse = {};   // local-only UI state, not synced
@@ -222,6 +223,7 @@ function renderHeader(){
   const pill = document.getElementById('weekPill');
   pill.textContent = 'Week ' + info.weekNum + ' · ' + (info.parity === 'odd' ? 'Odd' : 'Even');
   pill.className = 'week-pill' + (info.parity === 'even' ? ' even' : '');
+  document.getElementById('buildNum').textContent = 'v' + APP_VERSION;
 }
 
 /* ---------------- TODAY TAB ---------------- */
@@ -275,52 +277,100 @@ function saveTaskStateSoon(){
   scheduleSave('taskstate:' + isoDate(selectedDate), taskState, 400);
 }
 
+/* Today's Tasks now includes the (shared, admin-edited) Close Down
+   checklist as trailing sections on every day — same list every night,
+   but each day still gets its own tick/initial state since it's saved
+   under that day's taskstate:<date> key, continuing the same section
+   index numbering as the day's own sections. */
+function combinedSectionsFor(dayName, parity){
+  const daySections = (CONFIG.days[parity] && CONFIG.days[parity][dayName]) || [];
+  const closedown = CONFIG.closedown || [];
+  return daySections.concat(closedown);
+}
+
 function renderTodaySections(){
   const info = computeWeekInfo(selectedDate, CONFIG.weekAnchor);
   const dayName = dayNameOf(selectedDate);
-  const sections = (CONFIG.days[info.parity] && CONFIG.days[info.parity][dayName]) || [];
+  const sections = combinedSectionsFor(dayName, info.parity);
   const wrap = document.getElementById('todaySections');
   wrap.innerHTML = '';
 
   if(sections.length === 0){
     wrap.innerHTML = '<div class="empty-note">No tasks set up for this day yet. Add some in Admin.</div>';
+    document.getElementById('sectionPills').innerHTML = '';
     return;
   }
 
+  const cards = [];
   sections.forEach((section, sIdx) => {
     if(!taskState.sections[sIdx]) taskState.sections[sIdx] = {};
-    const card = buildSectionCard(section, sIdx, taskState.sections[sIdx], saveTaskStateNow, saveTaskStateSoon, 'today');
-    wrap.appendChild(card);
+    const built = buildSectionCard(section, sIdx, taskState.sections[sIdx], saveTaskStateNow, saveTaskStateSoon, 'today');
+    wrap.appendChild(built.card);
+    cards.push(built);
+  });
+
+  renderSectionPills(cards);
+}
+
+function renderSectionPills(cards){
+  const wrap = document.getElementById('sectionPills');
+  wrap.innerHTML = '';
+  cards.forEach(({ section, card, isComplete }) => {
+    const pill = document.createElement('button');
+    pill.className = 'section-pill' + (isComplete() ? ' complete' : '');
+    pill.textContent = section.name.replace(/\s*\(INITIAL WHEN COMPLETE\)/i, '');
+    pill.addEventListener('click', () => card.scrollIntoView({ behavior:'smooth', block:'start' }));
+    wrap.appendChild(pill);
   });
 }
 
-/* Shared section-card builder, used by Today tab and Close Down tab.
-   scopeKey namespaces the collapse-state map so today/closedown don't clash.
-   onToggle fires immediately (checkbox ticks); onType is debounced (typing
-   initials) — see the write-ordering notes near writeNow/scheduleSave. */
+/* Shared section-card builder. onToggle fires immediately (checkbox
+   ticks); onType is debounced (typing initials) — see the write-ordering
+   notes near writeNow/scheduleSave. Returns { card, section, isComplete }
+   so the caller can build the jump-pill row from the same data. */
 function buildSectionCard(section, sIdx, stateForSection, onToggle, onType, scopeKey){
   const collapseKey = scopeKey + ':' + sIdx;
   const card = document.createElement('div');
   card.className = 'section-card';
+  card.id = 'section-' + scopeKey + '-' + sIdx;
 
   const head = document.createElement('div');
   head.className = 'section-head';
 
   const isInfoSection = section.name === 'A-BOARD';
-  const doneCount = isInfoSection ? 0 : section.items.filter((_, i) => stateForSection[i] && stateForSection[i].done).length;
 
-  head.innerHTML = '<h3>' + escapeHtml(section.name) + '</h3>' +
-    (isInfoSection ? '' : '<span class="section-progress">' + doneCount + '/' + section.items.length + '</span>');
+  function isComplete(){
+    return !isInfoSection && section.items.length > 0 &&
+      section.items.every((_, i) => stateForSection[i] && stateForSection[i].done);
+  }
+
+  const headRight = document.createElement('div');
+  headRight.className = 'section-head-right';
+  const progressSpan = document.createElement('span');
+  progressSpan.className = 'section-progress';
+  const chevronSpan = document.createElement('span');
+  chevronSpan.className = 'chevron' + (sectionCollapse[collapseKey] ? ' collapsed' : '');
+  chevronSpan.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6,9 12,15 18,9"/></svg>';
+
+  const titleEl = document.createElement('h3');
+  titleEl.textContent = section.name;
+  head.appendChild(titleEl);
+  if(!isInfoSection) headRight.appendChild(progressSpan);
+  headRight.appendChild(chevronSpan);
+  head.appendChild(headRight);
   card.appendChild(head);
 
   const body = document.createElement('div');
   body.className = 'section-body' + (sectionCollapse[collapseKey] ? ' collapsed' : '');
   card.appendChild(body);
 
-  head.addEventListener('click', () => {
-    sectionCollapse[collapseKey] = !sectionCollapse[collapseKey];
-    body.classList.toggle('collapsed');
-  });
+  function setCollapsed(collapsed){
+    sectionCollapse[collapseKey] = collapsed;
+    body.classList.toggle('collapsed', collapsed);
+    chevronSpan.classList.toggle('collapsed', collapsed);
+  }
+
+  head.addEventListener('click', () => setCollapsed(!sectionCollapse[collapseKey]));
 
   section.items.forEach((itemText, iIdx) => {
     if(isInfoSection){
@@ -341,12 +391,21 @@ function buildSectionCard(section, sIdx, stateForSection, onToggle, onType, scop
     check.className = 'check' + (item.done ? ' done' : '');
     check.innerHTML = '<svg viewBox="0 0 24 24"><polyline points="4,13 9,18 20,6"/></svg>';
     check.addEventListener('click', () => {
+      const wasComplete = isComplete();
       item.done = !item.done;
       check.classList.toggle('done', item.done);
       text.classList.toggle('done', item.done);
-      head.querySelector('.section-progress') && updateProgress();
+      updateProgress();
       onToggle();
       if(item.done && !item.initials){ initialsInput.focus(); }
+
+      const nowComplete = isComplete();
+      if(nowComplete && !wasComplete){
+        // Short pause so the last tick is visible before the section tidies itself away.
+        setTimeout(() => {
+          if(isComplete()) setCollapsed(true);
+        }, 1500);
+      }
     });
 
     const text = document.createElement('div');
@@ -371,59 +430,18 @@ function buildSectionCard(section, sIdx, stateForSection, onToggle, onType, scop
   });
 
   function updateProgress(){
-    const el = head.querySelector('.section-progress');
-    if(!el) return;
+    if(isInfoSection) return;
     const c = section.items.filter((_, i) => stateForSection[i] && stateForSection[i].done).length;
-    el.textContent = c + '/' + section.items.length;
+    progressSpan.textContent = c + '/' + section.items.length;
+    card.classList.toggle('complete', isComplete());
   }
+  updateProgress();
 
-  return card;
+  return { card, section, isComplete };
 }
 
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-/* ---------------- CLOSE DOWN TAB ---------------- */
-
-let closedownStateKey = null;
-
-async function loadAndRenderClosedown(){
-  const key = 'closedownstate:' + isoDate(new Date());
-  const isDaySwitch = key !== closedownStateKey;
-  markStale();
-  if(isDaySwitch){
-    const remote = await apiGetFresh(key);
-    closedownState = remote || { sections: {} };
-    closedownStateKey = key;
-  } else {
-    const result = await pullGuarded(key);
-    if(!result.skip){ closedownState = result.value || { sections: {} }; }
-  }
-  markSynced();
-  renderClosedownSections();
-}
-
-function saveClosedownNow(){
-  writeNow('closedownstate:' + isoDate(new Date()), closedownState);
-}
-function saveClosedownSoon(){
-  scheduleSave('closedownstate:' + isoDate(new Date()), closedownState, 400);
-}
-
-function renderClosedownSections(){
-  const wrap = document.getElementById('closedownSections');
-  wrap.innerHTML = '';
-  const sections = CONFIG.closedown || [];
-  if(sections.length === 0){
-    wrap.innerHTML = '<div class="empty-note">No close-down checklist set up yet. Add one in Admin.</div>';
-    return;
-  }
-  sections.forEach((section, sIdx) => {
-    if(!closedownState.sections[sIdx]) closedownState.sections[sIdx] = {};
-    const card = buildSectionCard(section, sIdx, closedownState.sections[sIdx], saveClosedownNow, saveClosedownSoon, 'closedown');
-    wrap.appendChild(card);
-  });
 }
 
 /* ---------------- ORDER SHEET TAB ---------------- */
@@ -869,7 +887,6 @@ async function fullRefresh(){
   renderHeader();
 
   if(view === 'today') await loadAndRenderToday();
-  else if(view === 'closedown') await loadAndRenderClosedown();
   else if(view === 'order') await loadAndRenderOrder();
 }
 
@@ -879,8 +896,7 @@ setInterval(fullRefresh, 20000);
   window.addEventListener(ev, () => { if(document.visibilityState !== 'hidden') fullRefresh(); });
 });
 
-/* Preload the other tabs' data lazily when first opened */
-document.querySelector('.tab-btn[data-view="closedown"]').addEventListener('click', () => { if(!closedownState) loadAndRenderClosedown(); });
+/* Preload the Order Sheet tab's data lazily when first opened */
 document.querySelector('.tab-btn[data-view="order"]').addEventListener('click', () => { if(!orderEntries) loadAndRenderOrder(); });
 
 /* ---------------- INIT ---------------- */
