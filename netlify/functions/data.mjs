@@ -24,7 +24,7 @@ export default async (req) => {
 
   const cors = {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
   };
 
@@ -34,6 +34,18 @@ export default async (req) => {
 
   try {
     if (req.method === "GET") {
+      const list = url.searchParams.get("list");
+      if (list !== null) {
+        // list=<prefix> -> { keys: [...] }, used by the Admin > Previous
+        // weeks viewer to find which dates have stored task data.
+        const result = await store.list({ prefix: list });
+        const keys = (result.blobs || []).map((b) => b.key);
+        return new Response(JSON.stringify({ keys }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ...cors },
+        });
+      }
+
       const key = url.searchParams.get("key");
       if (!key) {
         return new Response(JSON.stringify({ error: "missing key" }), {
@@ -58,6 +70,21 @@ export default async (req) => {
         });
       }
       await store.setJSON(key, value);
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...cors },
+      });
+    }
+
+    if (req.method === "DELETE") {
+      const key = url.searchParams.get("key");
+      if (!key) {
+        return new Response(JSON.stringify({ error: "missing key" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...cors },
+        });
+      }
+      await store.delete(key);
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { "Content-Type": "application/json", ...cors },

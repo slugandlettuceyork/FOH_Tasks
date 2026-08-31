@@ -4,13 +4,13 @@
    tab only (editing task lists, close-down list, order sheet, week anchor).
 */
 
-const APP_VERSION = '2026-08-31.1'; // shown in header; bump this on every deploy so it's obvious a change landed
+const APP_VERSION = '2026-08-31.2'; // shown in header; bump this on every deploy so it's obvious a change landed
 
 const DAY_NAMES = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'];
 const DAY_SHORT = {MONDAY:'Mon',TUESDAY:'Tue',WEDNESDAY:'Wed',THURSDAY:'Thu',FRIDAY:'Fri',SATURDAY:'Sat',SUNDAY:'Sun'};
 
 let CONFIG = null;          // { days, closedown, order, adminPin, weekAnchor }
-let selectedDate = startOfDay(new Date());   // date shown on "Today's Tasks" tab
+let selectedDate = businessDate();   // date shown on "Today's Tasks" tab
 let taskState = null;       // state blob for selectedDate
 let orderEntries = null;    // persistent order-sheet entries
 let adminUnlocked = false;
@@ -21,6 +21,18 @@ let sectionCollapse = {};   // local-only UI state, not synced
 function pad(n){ return n < 10 ? '0' + n : '' + n; }
 function isoDate(d){ return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()); }
 function startOfDay(d){ const x = new Date(d); x.setHours(0,0,0,0); return x; }
+
+/* The venue trades past midnight, so a new "day" (and, on Mondays, a new
+   week) doesn't start until 4am rather than at midnight — 2am on what the
+   clock calls Monday is still Sunday night's shift as far as the
+   checklists are concerned. Everywhere the app needs "today", it should
+   go through this rather than `new Date()` directly. */
+function businessDate(){
+  const d = new Date();
+  if(d.getHours() < 4){ d.setDate(d.getDate() - 1); }
+  return startOfDay(d);
+}
+
 function mondayOf(d){
   const x = startOfDay(d);
   const dow = (x.getDay() + 6) % 7; // Mon=0 ... Sun=6
@@ -41,7 +53,7 @@ function computeWeekInfo(date, anchor){
 }
 
 function getCurrentWeekDates(){
-  const monday = mondayOf(new Date());
+  const monday = mondayOf(businessDate());
   const out = [];
   for(let i=0;i<7;i++){ const d = new Date(monday); d.setDate(monday.getDate()+i); out.push(d); }
   return out;
@@ -219,7 +231,7 @@ async function loadConfig(){
 
 function renderHeader(){
   const info = computeWeekInfo(selectedDate, CONFIG.weekAnchor);
-  document.getElementById('dateLine').textContent = formatLongDate(new Date());
+  document.getElementById('dateLine').textContent = formatLongDate(businessDate());
   const pill = document.getElementById('weekPill');
   pill.textContent = 'Week ' + info.weekNum + ' · ' + (info.parity === 'odd' ? 'Odd' : 'Even');
   pill.className = 'week-pill' + (info.parity === 'even' ? ' even' : '');
@@ -231,7 +243,7 @@ function renderHeader(){
 function renderDayStrip(){
   const strip = document.getElementById('dayStrip');
   strip.innerHTML = '';
-  const today = startOfDay(new Date());
+  const today = businessDate();
   getCurrentWeekDates().forEach(d => {
     const chip = document.createElement('button');
     chip.className = 'day-chip' + (isSameDay(d, selectedDate) ? ' active' : '') + (isSameDay(d, today) ? ' today' : '');
@@ -302,7 +314,14 @@ function renderTodaySections(){
   }
 
   const cards = [];
+  const dayCount = ((CONFIG.days[info.parity] && CONFIG.days[info.parity][dayName]) || []).length;
   sections.forEach((section, sIdx) => {
+    if(sIdx === dayCount && dayCount > 0 && (CONFIG.closedown || []).length > 0){
+      const heading = document.createElement('div');
+      heading.style.cssText = 'font-size:0.78rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.4px;margin:18px 4px 8px;';
+      heading.textContent = 'Closing checklist';
+      wrap.appendChild(heading);
+    }
     if(!taskState.sections[sIdx]) taskState.sections[sIdx] = {};
     const built = buildSectionCard(section, sIdx, taskState.sections[sIdx], saveTaskStateNow, saveTaskStateSoon, 'today');
     wrap.appendChild(built.card);
@@ -581,6 +600,102 @@ function renderAdminPanel(){
   panel.appendChild(buildTaskEditorSection());
   panel.appendChild(buildClosedownEditorSection());
   panel.appendChild(buildOrderEditorSection());
+  panel.appendChild(buildHistorySection());
+}
+
+/* Read-only viewer for previous days' sign-off data. Data is only kept for
+   2 weeks (a scheduled Netlify function prunes anything older nightly),
+   so this only ever has a couple of weeks to show. Uses the CURRENT task
+   list to label items, so if a task's wording has since been edited in
+   Admin, an old day may show slightly different text against its ticks —
+   the tick/initial history itself is exactly what was saved that day. */
+function buildHistorySection(){
+  const wrap = document.createElement('div');
+  wrap.className = 'admin-section';
+  wrap.innerHTML = '<h3>Previous weeks</h3><p style="color:var(--muted);font-size:0.82rem;margin-top:-4px;">Task data is kept for 2 weeks, then cleared out automatically.</p>';
+
+  const listWrap = document.createElement('div');
+  wrap.appendChild(listWrap);
+
+  const refreshBtn = document.createElement('button');
+  refreshBtn.className = 'btn secondary small';
+  refreshBtn.textContent = 'Load available days';
+  refreshBtn.addEventListener('click', loadDayList);
+  wrap.appendChild(refreshBtn);
+
+  const detailWrap = document.createElement('div');
+  detailWrap.style.marginTop = '12px';
+  wrap.appendChild(detailWrap);
+
+  async function loadDayList(){
+    listWrap.innerHTML = '<div class="empty-note">Loading…</div>';
+    try{
+      const res = await fetch('/api/data?list=' + encodeURIComponent('taskstate:'));
+      const j = await res.json();
+      const dates = (j.keys || [])
+        .map(k => k.slice('taskstate:'.length))
+        .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
+        .sort()
+        .reverse();
+      if(dates.length === 0){
+        listWrap.innerHTML = '<div class="empty-note">No stored days found yet.</div>';
+        return;
+      }
+      listWrap.innerHTML = '';
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;';
+      dates.forEach(dateStr => {
+        const d = new Date(dateStr + 'T00:00:00');
+        const btn = document.createElement('button');
+        btn.className = 'day-chip';
+        btn.textContent = DAY_SHORT[dayNameOf(d)] + ' ' + d.getDate() + '/' + (d.getMonth()+1);
+        btn.addEventListener('click', () => showDay(dateStr));
+        row.appendChild(btn);
+      });
+      listWrap.appendChild(row);
+    }catch(e){
+      listWrap.innerHTML = '<div class="empty-note">Couldn\'t load the list — try again.</div>';
+    }
+  }
+
+  async function showDay(dateStr){
+    detailWrap.innerHTML = '<div class="empty-note">Loading…</div>';
+    const d = new Date(dateStr + 'T00:00:00');
+    const info = computeWeekInfo(d, CONFIG.weekAnchor);
+    const dayName = dayNameOf(d);
+    const sections = combinedSectionsFor(dayName, info.parity);
+    const state = await apiGet('taskstate:' + dateStr);
+    detailWrap.innerHTML = '';
+
+    const heading = document.createElement('div');
+    heading.style.cssText = 'font-weight:600;margin-bottom:8px;';
+    heading.textContent = formatLongDate(d) + ' — Week ' + info.weekNum + ' (' + info.parity + ')';
+    detailWrap.appendChild(heading);
+
+    if(!state || !sections.length){
+      detailWrap.appendChild(Object.assign(document.createElement('div'), { className:'empty-note', textContent:'No data saved for this day.' }));
+      return;
+    }
+
+    sections.forEach((section, sIdx) => {
+      if(section.name === 'A-BOARD') return;
+      const sState = (state.sections && state.sections[sIdx]) || {};
+      const box = document.createElement('div');
+      box.style.cssText = 'background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px;';
+      const doneCount = section.items.filter((_, i) => sState[i] && sState[i].done).length;
+      let html = '<div style="font-weight:600;font-size:0.85rem;margin-bottom:6px;">' + escapeHtml(section.name) + ' — ' + doneCount + '/' + section.items.length + '</div>';
+      section.items.forEach((item, iIdx) => {
+        const st = sState[iIdx] || {};
+        html += '<div style="font-size:0.8rem;color:var(--muted);display:flex;justify-content:space-between;gap:8px;padding:2px 0;">' +
+          '<span style="color:' + (st.done ? 'var(--teal-dark)' : 'var(--muted)') + ';">' + (st.done ? '✓' : '—') + ' ' + escapeHtml(item) + '</span>' +
+          '<span>' + escapeHtml(st.initials || '') + '</span></div>';
+      });
+      box.innerHTML = html;
+      detailWrap.appendChild(box);
+    });
+  }
+
+  return wrap;
 }
 
 function buildAdminBar(){
