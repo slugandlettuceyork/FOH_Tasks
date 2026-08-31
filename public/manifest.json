@@ -1,0 +1,9 @@
+{
+  "name": "FOH Tasks - S&L York",
+  "short_name": "FOH Tasks",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#141A1F",
+  "theme_color": "#141A1F",
+  "icons": []
+}

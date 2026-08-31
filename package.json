@@ -1,0 +1,9 @@
+{
+  "name": "foh-tasks",
+  "version": "1.0.0",
+  "private": true,
+  "description": "S&L York - Front of House daily tasks and cleaning checklist app",
+  "dependencies": {
+    "@netlify/blobs": "^8.1.0"
+  }
+}
