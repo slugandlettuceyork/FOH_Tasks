@@ -97,7 +97,19 @@ const writeChains = {};   // key -> promise chain of queued saves, in order
 const pendingSave = {};   // key -> { resolve, timer } for the in-progress debounce batch
 const editGen = {};       // key -> counts local edits, used to detect races with in-flight pulls
 
-function bumpGen(key){ editGen[key] = (editGen[key] || 0) + 1; }
+// Belt-and-braces on top of the chain/generation guards above: Netlify Blobs
+// defaults to *eventual* consistency, so a read can occasionally hit a
+// stale edge-cached copy for a short while after a write (the backend
+// function now asks for 'strong' consistency to avoid this, but a sync
+// simply refusing to run during a burst of active ticking removes the
+// question entirely, on any device). No background/periodic sync runs
+// within this many ms of the last local edit; if one's due, it waits for
+// things to go quiet and retries once.
+const EDIT_GRACE_MS = 2500;
+let lastLocalEditAt = 0;
+let refreshRetryTimer = null;
+
+function bumpGen(key){ editGen[key] = (editGen[key] || 0) + 1; lastLocalEditAt = Date.now(); }
 
 function cloneVal(v){ return JSON.parse(JSON.stringify(v)); }
 
@@ -836,6 +848,13 @@ function activeViewName(){
 }
 
 async function fullRefresh(){
+  const elapsed = Date.now() - lastLocalEditAt;
+  if(elapsed < EDIT_GRACE_MS){
+    clearTimeout(refreshRetryTimer);
+    refreshRetryTimer = setTimeout(fullRefresh, EDIT_GRACE_MS - elapsed + 50);
+    return;
+  }
+
   const view = activeViewName();
   const isEditingAdmin = (view === 'admin' && adminUnlocked);
 

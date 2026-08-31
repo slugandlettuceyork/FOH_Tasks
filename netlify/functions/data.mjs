@@ -8,11 +8,18 @@ import { getStore } from "@netlify/blobs";
 // pattern) - the app is meant to be shared across kitchen/FOH tablets on
 // site. Sensitive actions (editing task lists) are gated client-side by the
 // 4-digit admin PIN stored inside the "config" record itself.
+//
+// consistency: 'strong' below matters - Netlify Blobs defaults to
+// "eventual" consistency (fast, edge-cached reads that can lag up to ~60s
+// behind the latest write). For a live checklist that's the wrong trade: a
+// tick gets saved, then a sync moments later reads a stale cached copy
+// without it, and it only reappears once the cache catches up. This bit
+// the Kitchen Tasks app the same way; fixed here from the start.
 
 const STORE_NAME = "foh-tasks";
 
 export default async (req) => {
-  const store = getStore(STORE_NAME);
+  const store = getStore({ name: STORE_NAME, consistency: "strong" });
   const url = new URL(req.url);
 
   const cors = {
