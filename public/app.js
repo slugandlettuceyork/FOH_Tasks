@@ -4,7 +4,7 @@
    tab only (editing task lists, close-down list, order sheet, week anchor).
 */
 
-const APP_VERSION = '2026-08-31.2'; // shown in header; bump this on every deploy so it's obvious a change landed
+const APP_VERSION = '2026-08-31.3'; // shown in header; bump this on every deploy so it's obvious a change landed
 
 const DAY_NAMES = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'];
 const DAY_SHORT = {MONDAY:'Mon',TUESDAY:'Tue',WEDNESDAY:'Wed',THURSDAY:'Thu',FRIDAY:'Fri',SATURDAY:'Sat',SUNDAY:'Sun'};
@@ -433,7 +433,7 @@ function buildSectionCard(section, sIdx, stateForSection, onToggle, onType, scop
 
     const initialsInput = document.createElement('input');
     initialsInput.className = 'initials-input';
-    initialsInput.maxLength = 4;
+    initialsInput.maxLength = 7;
     initialsInput.placeholder = 'init.';
     initialsInput.value = item.initials || '';
     initialsInput.addEventListener('input', () => {
