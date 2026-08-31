@@ -14,7 +14,6 @@ let closedownState = null;  // state blob for real "today"
 let orderEntries = null;    // persistent order-sheet entries
 let adminUnlocked = false;
 let sectionCollapse = {};   // local-only UI state, not synced
-let saveTimers = {};
 
 /* ---------------- date / week helpers ---------------- */
 
@@ -72,9 +71,87 @@ async function apiSet(key, value){
   }catch(e){ return false; }
 }
 
-function debouncedSave(key, value, delay){
-  clearTimeout(saveTimers[key]);
-  saveTimers[key] = setTimeout(() => { apiSet(key, value); markSynced(); }, delay || 500);
+/* ---------------- write ordering / anti-race sync layer ----------------
+   A tick or initial saves to local state instantly (UI updates right away),
+   but the save to the shared server happens as a background request. If a
+   periodic sync poll asks the server "what's current?" while that save is
+   still in flight, it can get back the pre-edit version and briefly stomp
+   the local edit until the next poll catches up. That's the "ticks
+   disappear then reappear" symptom.
+
+   Fix, in two parts:
+   1. Writes to the same key are chained in order (writeChains), and any
+      pull first waits for whatever's already queued for that key to land
+      on the server (pendingWrite/apiGetFresh) before asking for the
+      current value — so a pull can't read data out from under a save
+      that's already in flight.
+   2. That still leaves a narrower gap: an edit landing in the split-second
+      while the pull's own fetch to the server is already underway. Every
+      local edit bumps a per-key generation counter; a pull records that
+      counter before it starts and only applies the server's value if the
+      counter hasn't moved by the time the fetch resolves. If it has, the
+      pull leaves that key alone and lets the edit's own save (already
+      queued above) and the next poll settle it instead. */
+
+const writeChains = {};   // key -> promise chain of queued saves, in order
+const pendingSave = {};   // key -> { resolve, timer } for the in-progress debounce batch
+const editGen = {};       // key -> counts local edits, used to detect races with in-flight pulls
+
+function bumpGen(key){ editGen[key] = (editGen[key] || 0) + 1; }
+
+function cloneVal(v){ return JSON.parse(JSON.stringify(v)); }
+
+/* Immediate save (chained onto the key's queue), for discrete actions like
+   ticking a checkbox or hitting an explicit Save button. */
+function writeNow(key, value){
+  bumpGen(key);
+  markStale();
+  const snapshot = cloneVal(value);
+  const prevChain = writeChains[key] || Promise.resolve();
+  const next = prevChain.then(() => apiSet(key, snapshot).then(markSynced));
+  writeChains[key] = next.catch(() => {});
+  return next;
+}
+
+/* Debounced save for fast-typing fields (initials, sales target, etc).
+   Rapid edits within the delay window coalesce onto one pending batch and
+   send a single up-to-date snapshot — but the write is still registered in
+   the key's chain the moment the FIRST edit in the batch happens, so a pull
+   that starts mid-batch still waits for it. */
+function scheduleSave(key, value, delay){
+  bumpGen(key);
+  markStale();
+  if(!pendingSave[key]){
+    let resolveFn;
+    const placeholder = new Promise(res => { resolveFn = res; });
+    const prevChain = writeChains[key] || Promise.resolve();
+    writeChains[key] = prevChain.then(() => placeholder).catch(() => {});
+    pendingSave[key] = { resolve: resolveFn, timer: null };
+  }
+  pendingSave[key].snapshot = cloneVal(value);
+  clearTimeout(pendingSave[key].timer);
+  pendingSave[key].timer = setTimeout(() => {
+    const entry = pendingSave[key];
+    delete pendingSave[key];
+    apiSet(key, entry.snapshot).then(markSynced).finally(entry.resolve);
+  }, delay || 400);
+}
+
+function pendingWrite(key){ return writeChains[key] || Promise.resolve(); }
+
+async function apiGetFresh(key){
+  await pendingWrite(key);
+  return apiGet(key);
+}
+
+/* Returns {skip:true} if a local edit raced the fetch (caller should leave
+   its current local value alone), otherwise {skip:false, value}. */
+async function pullGuarded(key){
+  const genBefore = editGen[key] || 0;
+  const value = await apiGetFresh(key);
+  const genAfter = editGen[key] || 0;
+  if(genAfter !== genBefore) return { skip:true };
+  return { skip:false, value };
 }
 
 /* ---------------- toast / sync UI ---------------- */
@@ -115,12 +192,12 @@ function defaultConfig(){
 
 async function loadConfig(){
   markStale();
-  const remote = await apiGet('config');
+  const remote = await apiGetFresh('config');
   if(remote && remote.days){
     CONFIG = remote;
   } else {
     CONFIG = defaultConfig();
-    await apiSet('config', CONFIG); // seed it so admin edits have something to build on
+    await writeNow('config', CONFIG); // seed it so admin edits have something to build on
   }
   markSynced();
 }
@@ -150,13 +227,28 @@ function renderDayStrip(){
   });
 }
 
+let taskStateKey = null; // which date's state is currently loaded into `taskState`
+
 async function loadAndRenderToday(){
   renderHeader();
   renderDayStrip();
   const key = 'taskstate:' + isoDate(selectedDate);
+  const isDaySwitch = key !== taskStateKey;
   markStale();
-  const remote = await apiGet(key);
-  taskState = remote || { meta: { salesTarget:'', amManager:'', pmManager:'' }, sections: {} };
+
+  if(isDaySwitch){
+    // Genuinely new day being viewed — always load its real state.
+    const remote = await apiGetFresh(key);
+    taskState = remote || { meta: { salesTarget:'', amManager:'', pmManager:'' }, sections: {} };
+    taskStateKey = key;
+  } else {
+    // Periodic refresh of the day already on screen — don't clobber an edit
+    // that's racing this exact fetch.
+    const result = await pullGuarded(key);
+    if(!result.skip){
+      taskState = result.value || { meta: { salesTarget:'', amManager:'', pmManager:'' }, sections: {} };
+    }
+  }
   markSynced();
   document.getElementById('salesTarget').value = taskState.meta.salesTarget || '';
   document.getElementById('amManager').value = taskState.meta.amManager || '';
@@ -164,8 +256,11 @@ async function loadAndRenderToday(){
   renderTodaySections();
 }
 
+function saveTaskStateNow(){
+  writeNow('taskstate:' + isoDate(selectedDate), taskState);
+}
 function saveTaskStateSoon(){
-  debouncedSave('taskstate:' + isoDate(selectedDate), taskState, 500);
+  scheduleSave('taskstate:' + isoDate(selectedDate), taskState, 400);
 }
 
 function renderTodaySections(){
@@ -182,14 +277,16 @@ function renderTodaySections(){
 
   sections.forEach((section, sIdx) => {
     if(!taskState.sections[sIdx]) taskState.sections[sIdx] = {};
-    const card = buildSectionCard(section, sIdx, taskState.sections[sIdx], saveTaskStateSoon, 'today');
+    const card = buildSectionCard(section, sIdx, taskState.sections[sIdx], saveTaskStateNow, saveTaskStateSoon, 'today');
     wrap.appendChild(card);
   });
 }
 
 /* Shared section-card builder, used by Today tab and Close Down tab.
-   scopeKey namespaces the collapse-state map so today/closedown don't clash. */
-function buildSectionCard(section, sIdx, stateForSection, onChange, scopeKey){
+   scopeKey namespaces the collapse-state map so today/closedown don't clash.
+   onToggle fires immediately (checkbox ticks); onType is debounced (typing
+   initials) — see the write-ordering notes near writeNow/scheduleSave. */
+function buildSectionCard(section, sIdx, stateForSection, onToggle, onType, scopeKey){
   const collapseKey = scopeKey + ':' + sIdx;
   const card = document.createElement('div');
   card.className = 'section-card';
@@ -236,7 +333,7 @@ function buildSectionCard(section, sIdx, stateForSection, onChange, scopeKey){
       check.classList.toggle('done', item.done);
       text.classList.toggle('done', item.done);
       head.querySelector('.section-progress') && updateProgress();
-      onChange();
+      onToggle();
       if(item.done && !item.initials){ initialsInput.focus(); }
     });
 
@@ -252,7 +349,7 @@ function buildSectionCard(section, sIdx, stateForSection, onChange, scopeKey){
     initialsInput.addEventListener('input', () => {
       item.initials = initialsInput.value.toUpperCase();
       initialsInput.value = item.initials;
-      onChange();
+      onType();
     });
 
     row.appendChild(check);
@@ -277,17 +374,29 @@ function escapeHtml(s){
 
 /* ---------------- CLOSE DOWN TAB ---------------- */
 
+let closedownStateKey = null;
+
 async function loadAndRenderClosedown(){
   const key = 'closedownstate:' + isoDate(new Date());
+  const isDaySwitch = key !== closedownStateKey;
   markStale();
-  const remote = await apiGet(key);
-  closedownState = remote || { sections: {} };
+  if(isDaySwitch){
+    const remote = await apiGetFresh(key);
+    closedownState = remote || { sections: {} };
+    closedownStateKey = key;
+  } else {
+    const result = await pullGuarded(key);
+    if(!result.skip){ closedownState = result.value || { sections: {} }; }
+  }
   markSynced();
   renderClosedownSections();
 }
 
+function saveClosedownNow(){
+  writeNow('closedownstate:' + isoDate(new Date()), closedownState);
+}
 function saveClosedownSoon(){
-  debouncedSave('closedownstate:' + isoDate(new Date()), closedownState, 500);
+  scheduleSave('closedownstate:' + isoDate(new Date()), closedownState, 400);
 }
 
 function renderClosedownSections(){
@@ -300,23 +409,31 @@ function renderClosedownSections(){
   }
   sections.forEach((section, sIdx) => {
     if(!closedownState.sections[sIdx]) closedownState.sections[sIdx] = {};
-    const card = buildSectionCard(section, sIdx, closedownState.sections[sIdx], saveClosedownSoon, 'closedown');
+    const card = buildSectionCard(section, sIdx, closedownState.sections[sIdx], saveClosedownNow, saveClosedownSoon, 'closedown');
     wrap.appendChild(card);
   });
 }
 
 /* ---------------- ORDER SHEET TAB ---------------- */
 
+let orderEntriesLoaded = false;
+
 async function loadAndRenderOrder(){
   markStale();
-  const remote = await apiGet('orderentries');
-  orderEntries = remote || {};
+  if(!orderEntriesLoaded){
+    const remote = await apiGetFresh('orderentries');
+    orderEntries = remote || {};
+    orderEntriesLoaded = true;
+  } else {
+    const result = await pullGuarded('orderentries');
+    if(!result.skip){ orderEntries = result.value || {}; }
+  }
   markSynced();
   renderOrderTable();
 }
 
 function saveOrderSoon(){
-  debouncedSave('orderentries', orderEntries, 500);
+  scheduleSave('orderentries', orderEntries, 400);
 }
 
 function renderOrderTable(){
@@ -350,7 +467,7 @@ function renderOrderTable(){
 document.getElementById('clearOrderBtn').addEventListener('click', () => {
   if(!confirm('Clear all "need to order" amounts?')) return;
   orderEntries = {};
-  apiSet('orderentries', orderEntries);
+  writeNow('orderentries', orderEntries);
   renderOrderTable();
   toast('Cleared');
 });
@@ -449,7 +566,7 @@ function buildAdminBar(){
 }
 
 async function saveConfig(msg){
-  await apiSet('config', CONFIG);
+  await writeNow('config', CONFIG);
   toast(msg || 'Saved');
 }
 
@@ -719,13 +836,22 @@ function activeViewName(){
 }
 
 async function fullRefresh(){
-  await loadConfig();
-  renderHeader();
   const view = activeViewName();
+  const isEditingAdmin = (view === 'admin' && adminUnlocked);
+
+  // Admin edits (task/close-down/order-sheet editing) live in memory until
+  // the person hits an explicit Save button, unlike the tick/initial fields
+  // elsewhere which save near-instantly. Refreshing config from the server
+  // while that's happening would silently discard whatever they'd typed —
+  // so skip the background pull entirely until they save or lock the tab.
+  if(!isEditingAdmin){
+    await loadConfig();
+  }
+  renderHeader();
+
   if(view === 'today') await loadAndRenderToday();
   else if(view === 'closedown') await loadAndRenderClosedown();
   else if(view === 'order') await loadAndRenderOrder();
-  else if(view === 'admin' && adminUnlocked) renderAdminPanel();
 }
 
 document.getElementById('syncNowBtn').addEventListener('click', fullRefresh);
