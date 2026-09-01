@@ -4,7 +4,7 @@
    tab only (editing task lists, close-down list, order sheet, week anchor).
 */
 
-const APP_VERSION = '2026-09-01.1'; // shown in header; bump this on every deploy so it's obvious a change landed
+const APP_VERSION = '2026-09-01.2'; // shown in header; bump this on every deploy so it's obvious a change landed
 
 const DAY_NAMES = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'];
 const DAY_SHORT = {MONDAY:'Mon',TUESDAY:'Tue',WEDNESDAY:'Wed',THURSDAY:'Thu',FRIDAY:'Fri',SATURDAY:'Sat',SUNDAY:'Sun'};
@@ -306,6 +306,29 @@ function applyConfigFixes(cfg){
     });
   });
 
+  // 3) "Check Collins" follow-up task on Management Opening Tasks and
+  //    Manager Closing Tasks, every day, both weeks. Appended to the end
+  //    of each list (not inserted mid-list) so it can't shift the
+  //    position of any already-ticked item.
+  const collinsText = 'Check Collins - ensure all messages/enquiries have been picked up and responded to';
+  ['odd','even'].forEach(parity => {
+    const week = cfg.days && cfg.days[parity];
+    if(!week) return;
+    Object.keys(week).forEach(dayName => {
+      const sections = week[dayName] || [];
+      const openIdx = findSectionIndex(sections, 'MANAGEMENT OPENING TASKS');
+      const closeIdx = findSectionIndex(sections, 'MANAGER CLOSING TASKS');
+      if(openIdx !== -1 && !hasItemCI(sections[openIdx].items, collinsText)){
+        sections[openIdx].items.push(collinsText);
+        changed = true;
+      }
+      if(closeIdx !== -1 && !hasItemCI(sections[closeIdx].items, collinsText)){
+        sections[closeIdx].items.push(collinsText);
+        changed = true;
+      }
+    });
+  });
+
   return changed;
 }
 
@@ -363,21 +386,23 @@ async function loadAndRenderToday(){
   if(isDaySwitch){
     // Genuinely new day being viewed — always load its real state.
     const remote = await apiGetFresh(key);
-    taskState = remote || { meta: { salesTarget:'', amManager:'', pmManager:'' }, sections: {} };
+    taskState = remote || { meta: { salesTarget:'', amManager:'', pmManager:'', handoverNotes:'' }, sections: {} };
     taskStateKey = key;
   } else {
     // Periodic refresh of the day already on screen — don't clobber an edit
     // that's racing this exact fetch.
     const result = await pullGuarded(key);
     if(!result.skip){
-      taskState = result.value || { meta: { salesTarget:'', amManager:'', pmManager:'' }, sections: {} };
+      taskState = result.value || { meta: { salesTarget:'', amManager:'', pmManager:'', handoverNotes:'' }, sections: {} };
     }
   }
   await syncCarryOver();
+  await renderHandoverBanner();
   markSynced();
   document.getElementById('salesTarget').value = taskState.meta.salesTarget || '';
   document.getElementById('amManager').value = taskState.meta.amManager || '';
   document.getElementById('pmManager').value = taskState.meta.pmManager || '';
+  document.getElementById('handoverNotes').value = taskState.meta.handoverNotes || '';
   renderTodaySections();
 }
 
@@ -715,6 +740,35 @@ function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+/* ---------------- handover notes ---------------- */
+
+/* Free-text box at the bottom of Today's Tasks; whatever's typed there
+   shows as a banner at the top of the next day's tasks (relative to
+   whichever day is being viewed, not necessarily "today" — so browsing
+   back to a past day in the day-strip shows what was handed over into
+   it). Read directly from the previous day's own taskstate record rather
+   than anything synced separately, so it needs no extra backend key. */
+async function renderHandoverBanner(){
+  const banner = document.getElementById('handoverBanner');
+  const prevDate = addDays(selectedDate, -1);
+  const prevState = await apiGet('taskstate:' + isoDate(prevDate));
+  const notes = prevState && prevState.meta && prevState.meta.handoverNotes && prevState.meta.handoverNotes.trim();
+  banner.innerHTML = '';
+  if(!notes){
+    banner.style.display = 'none';
+    return;
+  }
+  banner.style.display = '';
+  const title = document.createElement('div');
+  title.className = 'handover-banner-title';
+  title.textContent = 'Handover from ' + formatShortDate(prevDate);
+  const body = document.createElement('div');
+  body.className = 'handover-banner-body';
+  body.textContent = notes;
+  banner.appendChild(title);
+  banner.appendChild(body);
+}
+
 /* ---------------- ORDER SHEET TAB ---------------- */
 
 let orderEntriesLoaded = false;
@@ -776,6 +830,7 @@ document.getElementById('clearOrderBtn').addEventListener('click', () => {
 document.getElementById('salesTarget').addEventListener('input', e => { taskState.meta.salesTarget = e.target.value; saveTaskStateSoon(); });
 document.getElementById('amManager').addEventListener('input', e => { taskState.meta.amManager = e.target.value; saveTaskStateSoon(); });
 document.getElementById('pmManager').addEventListener('input', e => { taskState.meta.pmManager = e.target.value; saveTaskStateSoon(); });
+document.getElementById('handoverNotes').addEventListener('input', e => { taskState.meta.handoverNotes = e.target.value; saveTaskStateSoon(); });
 
 /* ---------------- ADMIN TAB ---------------- */
 

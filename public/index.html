@@ -194,6 +194,22 @@ main{max-width:720px; margin:0 auto; padding:16px 14px 40px;}
   color:var(--text); padding:7px 8px; font-size:0.85rem;
 }
 
+/* Handover notes */
+.handover-banner{
+  background:var(--gold-light); border:1px solid #F0DBAE; border-radius:var(--radius);
+  padding:12px 16px; margin-bottom:14px;
+}
+.handover-banner-title{font-size:0.72rem; font-weight:700; color:var(--gold); text-transform:uppercase; letter-spacing:0.4px; margin-bottom:4px;}
+.handover-banner-body{font-size:0.88rem; color:var(--text); white-space:pre-wrap; line-height:1.4;}
+.handover-card{
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+  padding:14px 16px; margin-top:16px;
+}
+.handover-card textarea{
+  width:100%; background:var(--surface-2); border:1px solid var(--border-strong); border-radius:8px;
+  color:var(--text); padding:9px 10px; font-size:0.87rem; font-family:inherit; resize:vertical;
+}
+
 /* Order sheet */
 .order-table{width:100%; border-collapse:collapse; font-size:0.85rem;}
 .order-table th{text-align:left; color:var(--muted); font-weight:600; font-size:0.72rem; text-transform:uppercase; padding:6px 6px; border-bottom:1px solid var(--border);}
@@ -295,6 +311,7 @@ main{max-width:720px; margin:0 auto; padding:16px 14px 40px;}
 
   <section id="view-today" class="view active">
     <div class="day-strip" id="dayStrip"></div>
+    <div id="handoverBanner" class="handover-banner" style="display:none;"></div>
     <div class="section-pills" id="sectionPills"></div>
     <div class="meta-card">
       <div class="meta-item"><label>Sales Target</label><input type="text" id="salesTarget" placeholder="£"></div>
@@ -302,6 +319,10 @@ main{max-width:720px; margin:0 auto; padding:16px 14px 40px;}
       <div class="meta-item"><label>PM Manager</label><input type="text" id="pmManager" placeholder="Initials"></div>
     </div>
     <div id="todaySections"></div>
+    <div class="handover-card">
+      <label class="field-label" style="margin-top:0;">Handover Notes — shows at the top of tomorrow's tasks</label>
+      <textarea id="handoverNotes" rows="4" placeholder="Anything the next shift needs to know…"></textarea>
+    </div>
   </section>
 
   <section id="view-order" class="view">
