@@ -4,10 +4,18 @@
    tab only (editing task lists, close-down list, order sheet, week anchor).
 */
 
-const APP_VERSION = '2026-08-31.3'; // shown in header; bump this on every deploy so it's obvious a change landed
+const APP_VERSION = '2026-09-01.1'; // shown in header; bump this on every deploy so it's obvious a change landed
 
 const DAY_NAMES = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'];
 const DAY_SHORT = {MONDAY:'Mon',TUESDAY:'Tue',WEDNESDAY:'Wed',THURSDAY:'Thu',FRIDAY:'Fri',SATURDAY:'Sat',SUNDAY:'Sun'};
+// One colour per weekday for the day-strip pills (readable text kept dark/white per pair).
+const DAY_CLASS = {MONDAY:'mon',TUESDAY:'tue',WEDNESDAY:'wed',THURSDAY:'thu',FRIDAY:'fri',SATURDAY:'sat',SUNDAY:'sun'};
+
+/* Daily Cleaning Tasks items that didn't get ticked + initialed carry
+   forward onto the next day (and the next, etc) so they don't get lost,
+   but we don't want them piling up forever if something's genuinely not
+   getting done — they drop off after this many days. */
+const CARRY_MAX_DAYS = 3;
 
 let CONFIG = null;          // { days, closedown, order, adminPin, weekAnchor }
 let selectedDate = businessDate();   // date shown on "Today's Tasks" tab
@@ -61,6 +69,21 @@ function getCurrentWeekDates(){
 
 function formatLongDate(d){
   return d.toLocaleDateString('en-GB', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+}
+
+/* 1st, 2nd, 3rd, 4th... */
+function ordinal(n){
+  const s = ['th','st','nd','rd'];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+function addDays(d, n){ const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+function daysBetweenIso(isoA, isoB){
+  return Math.round((new Date(isoB + 'T00:00:00') - new Date(isoA + 'T00:00:00')) / 86400000);
+}
+function formatShortDate(d){
+  return DAY_SHORT[dayNameOf(d)] + ' ' + ordinal(d.getDate()) + ' ' + d.toLocaleDateString('en-GB',{month:'short'});
 }
 
 /* ---------------- backend helpers ---------------- */
@@ -215,6 +238,77 @@ function defaultConfig(){
   };
 }
 
+/* One-off content fixes, written to run idempotently so they self-heal the
+   live config in Blobs regardless of what's actually stored there (default
+   seed data or whatever Admin has since edited) — see PROJECT NOTES. Safe
+   to run on every load: once applied there's nothing left to find, so
+   later runs are no-ops. */
+function findSectionIndex(sections, nameStartsWith){
+  return sections.findIndex(s => s.name && s.name.toUpperCase().startsWith(nameStartsWith));
+}
+function removeItemCI(items, text){
+  const needle = text.trim().toLowerCase();
+  const idx = items.findIndex(i => i.trim().toLowerCase() === needle);
+  if(idx === -1) return false;
+  items.splice(idx, 1);
+  return true;
+}
+function hasItemCI(items, text){
+  const needle = text.trim().toLowerCase();
+  return items.some(i => i.trim().toLowerCase() === needle);
+}
+
+function applyConfigFixes(cfg){
+  let changed = false;
+
+  // 1) Remove "Daily spot check completed" everywhere (any day, any section, both weeks).
+  ['odd','even'].forEach(parity => {
+    const week = cfg.days && cfg.days[parity];
+    if(!week) return;
+    Object.keys(week).forEach(dayName => {
+      (week[dayName] || []).forEach(section => {
+        if(removeItemCI(section.items, 'Daily spot check completed')) changed = true;
+      });
+    });
+  });
+
+  // 2) Swap "deck scrub cellar mat / cellar and spirit cupboard swept" onto
+  //    Thursday, and "top of all bar fridges dusted / fridge seals and
+  //    wooden surrounds cleaned" onto Tuesday, in the Daily Cleaning Tasks
+  //    section, for both odd and even weeks. Written as a from-Tue-to-Thu
+  //    and from-Thu-to-Tue move rather than an outright overwrite so it's a
+  //    no-op wherever a week is already arranged this way.
+  const cellarItems = ['Deck scrub cellar mat in front of pre-mix', 'Cellar and spirit cupboard swept'];
+  const fridgeItems = ['Top of all bar fridges dusted', 'Fridge seals and wooden surrounds cleaned'];
+
+  ['odd','even'].forEach(parity => {
+    const week = cfg.days && cfg.days[parity];
+    if(!week || !week.TUESDAY || !week.THURSDAY) return;
+    const tueSections = week.TUESDAY;
+    const thuSections = week.THURSDAY;
+    const tueIdx = findSectionIndex(tueSections, 'DAILY CLEANING TASKS');
+    const thuIdx = findSectionIndex(thuSections, 'DAILY CLEANING TASKS');
+    if(tueIdx === -1 || thuIdx === -1) return;
+    const tueItems = tueSections[tueIdx].items;
+    const thuItems = thuSections[thuIdx].items;
+
+    cellarItems.forEach(text => {
+      if(removeItemCI(tueItems, text)){
+        changed = true;
+        if(!hasItemCI(thuItems, text)) thuItems.push(text);
+      }
+    });
+    fridgeItems.forEach(text => {
+      if(removeItemCI(thuItems, text)){
+        changed = true;
+        if(!hasItemCI(tueItems, text)) tueItems.push(text);
+      }
+    });
+  });
+
+  return changed;
+}
+
 async function loadConfig(){
   markStale();
   const remote = await apiGetFresh('config');
@@ -223,6 +317,9 @@ async function loadConfig(){
   } else {
     CONFIG = defaultConfig();
     await writeNow('config', CONFIG); // seed it so admin edits have something to build on
+  }
+  if(applyConfigFixes(CONFIG)){
+    await writeNow('config', CONFIG); // persist the correction so it sticks and other devices pick it up
   }
   markSynced();
 }
@@ -246,8 +343,9 @@ function renderDayStrip(){
   const today = businessDate();
   getCurrentWeekDates().forEach(d => {
     const chip = document.createElement('button');
-    chip.className = 'day-chip' + (isSameDay(d, selectedDate) ? ' active' : '') + (isSameDay(d, today) ? ' today' : '');
-    chip.textContent = DAY_SHORT[dayNameOf(d)] + ' ' + d.getDate();
+    chip.className = 'day-chip ' + DAY_CLASS[dayNameOf(d)] +
+      (isSameDay(d, selectedDate) ? ' active' : '') + (isSameDay(d, today) ? ' today' : '');
+    chip.textContent = DAY_SHORT[dayNameOf(d)] + ' ' + ordinal(d.getDate());
     chip.addEventListener('click', () => { selectedDate = d; loadAndRenderToday(); });
     strip.appendChild(chip);
   });
@@ -275,6 +373,7 @@ async function loadAndRenderToday(){
       taskState = result.value || { meta: { salesTarget:'', amManager:'', pmManager:'' }, sections: {} };
     }
   }
+  await syncCarryOver();
   markSynced();
   document.getElementById('salesTarget').value = taskState.meta.salesTarget || '';
   document.getElementById('amManager').value = taskState.meta.amManager || '';
@@ -288,6 +387,85 @@ function saveTaskStateNow(){
 function saveTaskStateSoon(){
   scheduleSave('taskstate:' + isoDate(selectedDate), taskState, 400);
 }
+
+/* ---------------- Daily Cleaning Tasks carry-over ----------------
+   Anything in the Daily Cleaning Tasks section that isn't both ticked AND
+   initialed by the end of the day rolls onto the next day (and the one
+   after, up to CARRY_MAX_DAYS) as an extra, clearly-flagged row in that
+   same section, until someone completes it or it ages out. Tracked
+   separately from the day-specific taskstate records (it isn't really
+   "owned" by any one date), under its own 'carryover' key so it gets the
+   same cross-device sync treatment via the generic writeNow/scheduleSave/
+   pullGuarded machinery above. */
+
+let carryOver = null; // { lastProcessedDate: 'YYYY-MM-DD'|null, items: [{id,text,originDate,done,initials}] }
+
+function defaultCarryOver(){ return { lastProcessedDate: null, items: [] }; }
+
+/* Walks forward from the last date we checked, up to (not including)
+   today, folding any still-incomplete Daily Cleaning Tasks items from each
+   elapsed day into the carry list (de-duped by task text, so a task
+   already being carried isn't added twice), then drops anything that's
+   aged past CARRY_MAX_DAYS. Mutates `co` in place; returns whether
+   anything changed so the caller knows whether to persist it. */
+async function computeCarryOverUpdates(co){
+  const today = businessDate();
+  let changed = false;
+
+  if(!co.lastProcessedDate){
+    // First run ever — nothing to backfill, just start tracking from here.
+    co.lastProcessedDate = isoDate(addDays(today, -1));
+    changed = true;
+  } else {
+    let cursor = addDays(new Date(co.lastProcessedDate + 'T00:00:00'), 1);
+    while(cursor < today){
+      const dayName = dayNameOf(cursor);
+      const parity = computeWeekInfo(cursor, CONFIG.weekAnchor).parity;
+      const sections = combinedSectionsFor(dayName, parity);
+      const sIdx = findSectionIndex(sections, 'DAILY CLEANING TASKS');
+      if(sIdx !== -1 && sections[sIdx].items.length){
+        const state = await apiGet('taskstate:' + isoDate(cursor));
+        const sectionState = (state && state.sections && state.sections[sIdx]) || {};
+        sections[sIdx].items.forEach((text, iIdx) => {
+          const st = sectionState[iIdx];
+          const doneOk = st && st.done && st.initials && st.initials.trim();
+          const alreadyTracked = co.items.some(c => c.text.trim().toLowerCase() === text.trim().toLowerCase());
+          if(!doneOk && !alreadyTracked){
+            co.items.push({
+              id: 'carry-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+              text, originDate: isoDate(cursor), done: false, initials: ''
+            });
+            changed = true;
+          }
+        });
+      }
+      co.lastProcessedDate = isoDate(cursor);
+      changed = true;
+      cursor = addDays(cursor, 1);
+    }
+  }
+
+  const todayIso = isoDate(today);
+  const before = co.items.length;
+  co.items = co.items.filter(c => daysBetweenIso(c.originDate, todayIso) <= CARRY_MAX_DAYS);
+  if(co.items.length !== before) changed = true;
+
+  return changed;
+}
+
+async function syncCarryOver(){
+  if(!carryOver){
+    carryOver = (await apiGetFresh('carryover')) || defaultCarryOver();
+  } else {
+    const result = await pullGuarded('carryover');
+    if(!result.skip) carryOver = result.value || defaultCarryOver();
+  }
+  const changed = await computeCarryOverUpdates(carryOver);
+  if(changed) await writeNow('carryover', carryOver);
+}
+
+function saveCarryOverNow(){ writeNow('carryover', carryOver); }
+function saveCarryOverSoon(){ scheduleSave('carryover', carryOver, 400); }
 
 /* Today's Tasks now includes the (shared, admin-edited) Close Down
    checklist as trailing sections on every day — same list every night,
@@ -313,6 +491,11 @@ function renderTodaySections(){
     return;
   }
 
+  // Carried-over Daily Cleaning Tasks items only ever show against "today"
+  // — not when browsing other days of the week in the day-strip.
+  const isTodayView = isSameDay(selectedDate, businessDate());
+  const dailyCleaningIdx = isTodayView ? findSectionIndex(sections, 'DAILY CLEANING TASKS') : -1;
+
   const cards = [];
   const dayCount = ((CONFIG.days[info.parity] && CONFIG.days[info.parity][dayName]) || []).length;
   sections.forEach((section, sIdx) => {
@@ -323,7 +506,8 @@ function renderTodaySections(){
       wrap.appendChild(heading);
     }
     if(!taskState.sections[sIdx]) taskState.sections[sIdx] = {};
-    const built = buildSectionCard(section, sIdx, taskState.sections[sIdx], saveTaskStateNow, saveTaskStateSoon, 'today');
+    const carryItems = (sIdx === dailyCleaningIdx && carryOver) ? carryOver.items : [];
+    const built = buildSectionCard(section, sIdx, taskState.sections[sIdx], saveTaskStateNow, saveTaskStateSoon, 'today', carryItems);
     wrap.appendChild(built.card);
     cards.push(built);
   });
@@ -347,7 +531,8 @@ function renderSectionPills(cards){
    ticks); onType is debounced (typing initials) — see the write-ordering
    notes near writeNow/scheduleSave. Returns { card, section, isComplete }
    so the caller can build the jump-pill row from the same data. */
-function buildSectionCard(section, sIdx, stateForSection, onToggle, onType, scopeKey){
+function buildSectionCard(section, sIdx, stateForSection, onToggle, onType, scopeKey, carryItems){
+  carryItems = carryItems || [];
   const collapseKey = scopeKey + ':' + sIdx;
   const card = document.createElement('div');
   card.className = 'section-card';
@@ -444,6 +629,73 @@ function buildSectionCard(section, sIdx, stateForSection, onToggle, onType, scop
 
     row.appendChild(check);
     row.appendChild(text);
+    row.appendChild(initialsInput);
+    body.appendChild(row);
+  });
+
+  // Carried-over items from previous day(s) — same look as a normal task
+  // row, plus a small tag showing where it carried from. Completing one
+  // (ticked AND initialed) removes it from the carry list entirely; it
+  // won't reappear tomorrow.
+  carryItems.forEach(citem => {
+    const row = document.createElement('div');
+    row.className = 'task-row carried';
+
+    const check = document.createElement('button');
+    check.className = 'check' + (citem.done ? ' done' : '');
+    check.innerHTML = '<svg viewBox="0 0 24 24"><polyline points="4,13 9,18 20,6"/></svg>';
+
+    const textWrap = document.createElement('div');
+    textWrap.className = 'task-text-wrap';
+    const text = document.createElement('div');
+    text.className = 'task-text' + (citem.done ? ' done' : '');
+    text.textContent = citem.text;
+    const tag = document.createElement('div');
+    tag.className = 'carried-tag';
+    tag.textContent = 'Carried from ' + formatShortDate(new Date(citem.originDate + 'T00:00:00'));
+    textWrap.appendChild(text);
+    textWrap.appendChild(tag);
+
+    const initialsInput = document.createElement('input');
+    initialsInput.className = 'initials-input';
+    initialsInput.maxLength = 7;
+    initialsInput.placeholder = 'init.';
+    initialsInput.value = citem.initials || '';
+
+    function maybeResolve(){
+      if(citem.done && citem.initials && citem.initials.trim()){
+        // Short pause so the tick/initials are visible before the row disappears.
+        // Resolves against the live carryOver.items (by id) rather than the
+        // array captured at render time, in case a background sync swapped
+        // in a fresh carryOver object while this was pending.
+        setTimeout(() => {
+          if(carryOver && carryOver.items){
+            const idx = carryOver.items.findIndex(c => c.id === citem.id);
+            if(idx !== -1) carryOver.items.splice(idx, 1);
+          }
+          saveCarryOverNow();
+          renderTodaySections();
+        }, 900);
+      }
+    }
+
+    check.addEventListener('click', () => {
+      citem.done = !citem.done;
+      check.classList.toggle('done', citem.done);
+      text.classList.toggle('done', citem.done);
+      saveCarryOverNow();
+      if(citem.done && !citem.initials){ initialsInput.focus(); }
+      maybeResolve();
+    });
+    initialsInput.addEventListener('input', () => {
+      citem.initials = initialsInput.value.toUpperCase();
+      initialsInput.value = citem.initials;
+      saveCarryOverSoon();
+      maybeResolve();
+    });
+
+    row.appendChild(check);
+    row.appendChild(textWrap);
     row.appendChild(initialsInput);
     body.appendChild(row);
   });

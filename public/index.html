@@ -105,6 +105,22 @@ main{max-width:720px; margin:0 auto; padding:16px 14px 40px;}
 .day-chip.active{background:var(--teal); border-color:var(--teal); color:#fff;}
 .day-chip.today::after{content:' •'; color:var(--gold);}
 
+/* One colour per weekday, readable at rest and when active/selected. */
+.day-chip.mon{background:#E7F0FE; border-color:#C6DBFB; color:#1F4E8C;}
+.day-chip.tue{background:#F3E9FE; border-color:#E0CBFC; color:#6B3199;}
+.day-chip.wed{background:#E6F7EC; border-color:#C3ECD1; color:#1E7A42;}
+.day-chip.thu{background:#FFF1DE; border-color:#FBDDA9; color:#8A5A0B;}
+.day-chip.fri{background:#FDE8EC; border-color:#F8C9D2; color:#A32D5B;}
+.day-chip.sat{background:var(--teal-light); border-color:#BCE4D6; color:var(--teal-dark);}
+.day-chip.sun{background:#F1ECE2; border-color:#DDD4C0; color:#5B4A2E;}
+.day-chip.mon.active{background:#1F4E8C; border-color:#1F4E8C; color:#fff;}
+.day-chip.tue.active{background:#6B3199; border-color:#6B3199; color:#fff;}
+.day-chip.wed.active{background:#1E7A42; border-color:#1E7A42; color:#fff;}
+.day-chip.thu.active{background:#8A5A0B; border-color:#8A5A0B; color:#fff;}
+.day-chip.fri.active{background:#A32D5B; border-color:#A32D5B; color:#fff;}
+.day-chip.sat.active{background:var(--teal); border-color:var(--teal); color:#fff;}
+.day-chip.sun.active{background:#5B4A2E; border-color:#5B4A2E; color:#fff;}
+
 /* Section jump pills */
 .section-pills{display:flex; gap:6px; overflow-x:auto; padding-bottom:4px; margin-bottom:14px; scrollbar-width:none;}
 .section-pills::-webkit-scrollbar{display:none;}
@@ -153,6 +169,13 @@ main{max-width:720px; margin:0 auto; padding:16px 14px 40px;}
   padding:6px 4px; font-size:0.8rem; text-transform:uppercase;
 }
 .initials-input::placeholder{color:var(--muted-2); text-transform:none;}
+
+/* Carried-over Daily Cleaning Tasks items */
+.task-row.carried{background:var(--gold-light); margin:0 -8px; padding:10px 8px; border-radius:8px; border-top:none;}
+.task-row.carried + .task-row.carried{margin-top:4px;}
+.task-text-wrap{flex:1; min-width:0;}
+.task-text-wrap .task-text{margin-bottom:2px;}
+.carried-tag{font-size:0.7rem; font-weight:600; color:var(--gold);}
 
 .info-row{
   padding:9px 8px; border-top:1px solid var(--border); font-size:0.87rem; color:var(--muted);
