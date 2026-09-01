@@ -4,7 +4,7 @@
    tab only (editing task lists, close-down list, order sheet, week anchor).
 */
 
-const APP_VERSION = '2026-09-01.2'; // shown in header; bump this on every deploy so it's obvious a change landed
+const APP_VERSION = '2026-09-01.3'; // shown in header; bump this on every deploy so it's obvious a change landed
 
 const DAY_NAMES = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'];
 const DAY_SHORT = {MONDAY:'Mon',TUESDAY:'Tue',WEDNESDAY:'Wed',THURSDAY:'Thu',FRIDAY:'Fri',SATURDAY:'Sat',SUNDAY:'Sun'};
@@ -253,6 +253,11 @@ function removeItemCI(items, text){
   items.splice(idx, 1);
   return true;
 }
+function removeAllItemCI(items, text){
+  let removedAny = false;
+  while(removeItemCI(items, text)) removedAny = true;
+  return removedAny;
+}
 function hasItemCI(items, text){
   const needle = text.trim().toLowerCase();
   return items.some(i => i.trim().toLowerCase() === needle);
@@ -261,13 +266,16 @@ function hasItemCI(items, text){
 function applyConfigFixes(cfg){
   let changed = false;
 
-  // 1) Remove "Daily spot check completed" everywhere (any day, any section, both weeks).
+  // 1) Remove "Daily spot check completed" and the old "Check Collins -
+  //    Open enquiries and messages" line (superseded by the fuller wording
+  //    added below) everywhere — any day, any section, both weeks.
   ['odd','even'].forEach(parity => {
     const week = cfg.days && cfg.days[parity];
     if(!week) return;
     Object.keys(week).forEach(dayName => {
       (week[dayName] || []).forEach(section => {
-        if(removeItemCI(section.items, 'Daily spot check completed')) changed = true;
+        if(removeAllItemCI(section.items, 'Daily spot check completed')) changed = true;
+        if(removeAllItemCI(section.items, 'Check Collins - Open enquiries and messages')) changed = true;
       });
     });
   });
