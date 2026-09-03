@@ -4,7 +4,7 @@
    tab only (editing task lists, close-down list, order sheet, week anchor).
 */
 
-const APP_VERSION = '2026-09-01.3'; // shown in header; bump this on every deploy so it's obvious a change landed
+const APP_VERSION = '2026-09-01.4'; // shown in header; bump this on every deploy so it's obvious a change landed
 
 const DAY_NAMES = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'];
 const DAY_SHORT = {MONDAY:'Mon',TUESDAY:'Tue',WEDNESDAY:'Wed',THURSDAY:'Thu',FRIDAY:'Fri',SATURDAY:'Sat',SUNDAY:'Sun'};
@@ -340,6 +340,39 @@ function applyConfigFixes(cfg){
   return changed;
 }
 
+/* Extra self-healing fix layered on top of applyConfigFixes, added later:
+   "LWC order placed" should only appear on Monday's Management Opening
+   Tasks, in both weeks — remove it anywhere else it's found, and add it
+   to Monday if it's missing there. */
+function applyConfigFixesLWC(cfg){
+  let changed = false;
+  const lwcText = 'LWC order placed';
+
+  ['odd','even'].forEach(parity => {
+    const week = cfg.days && cfg.days[parity];
+    if(!week) return;
+
+    // Strip it out of every day first (any section).
+    Object.keys(week).forEach(dayName => {
+      (week[dayName] || []).forEach(section => {
+        if(removeAllItemCI(section.items, lwcText)) changed = true;
+      });
+    });
+
+    // Then ensure it's on Monday's Management Opening Tasks.
+    const monSections = week.MONDAY;
+    if(monSections){
+      const openIdx = findSectionIndex(monSections, 'MANAGEMENT OPENING TASKS');
+      if(openIdx !== -1 && !hasItemCI(monSections[openIdx].items, lwcText)){
+        monSections[openIdx].items.push(lwcText);
+        changed = true;
+      }
+    }
+  });
+
+  return changed;
+}
+
 async function loadConfig(){
   markStale();
   const remote = await apiGetFresh('config');
@@ -349,7 +382,9 @@ async function loadConfig(){
     CONFIG = defaultConfig();
     await writeNow('config', CONFIG); // seed it so admin edits have something to build on
   }
-  if(applyConfigFixes(CONFIG)){
+  const fixed1 = applyConfigFixes(CONFIG);
+  const fixed2 = applyConfigFixesLWC(CONFIG);
+  if(fixed1 || fixed2){
     await writeNow('config', CONFIG); // persist the correction so it sticks and other devices pick it up
   }
   markSynced();
