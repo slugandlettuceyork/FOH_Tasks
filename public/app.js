@@ -4,7 +4,7 @@
    tab only (editing task lists, close-down list, order sheet, week anchor).
 */
 
-const APP_VERSION = '2026-09-01.5'; // shown in header; bump this on every deploy so it's obvious a change landed
+const APP_VERSION = '2026-09-01.6'; // shown in header; bump this on every deploy so it's obvious a change landed
 
 const DAY_NAMES = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'];
 const DAY_SHORT = {MONDAY:'Mon',TUESDAY:'Tue',WEDNESDAY:'Wed',THURSDAY:'Thu',FRIDAY:'Fri',SATURDAY:'Sat',SUNDAY:'Sun'};
@@ -424,38 +424,49 @@ function insertSectionAfter(sections, afterNameStartsWith, newSection){
 }
 
 /* New stock-check sections, one day each, both weeks — inserted directly
-   under Daily Cleaning Tasks. Left alone on any later run once present,
-   so Admin edits to their wording/items afterwards won't get overwritten. */
+   under Daily Cleaning Tasks. Renames the section in place if it was
+   already created under an earlier name (so items/position are kept, not
+   duplicated); only inserts fresh if neither name exists yet. Left alone
+   once the current name is present, so later Admin edits to items won't
+   get overwritten. */
 function applyConfigFixesNewStockSections(cfg){
   let changed = false;
-  const garnishSection = {
-    name: 'GARNISH STOCK CHECK (INITIAL WHEN COMPLETE)',
-    items: ['Limes – 6 boxes','Lemons – 3 boxes','Mint – 5 boxes','Mint sprigs – 2 boxes','Oranges – 3 boxes','Chillies – 1 box']
-  };
-  const syrupSection = {
-    name: 'SYRUPS & JUICES STOCK CHECK (INITIAL WHEN COMPLETE)',
-    items: ['Lemon – 6 bottles','Lime – 4 bottles','Passion Fruit – 6 bottles','Strawberry – 4 bottles','Solo coffee – 4 bottles']
-  };
-  const caddySection = {
-    name: 'FRUIT CADDY STOCK CHECK (INITIAL WHEN COMPLETE)',
-    items: ['Strawberries – 5 caddies','Grapefruit – 2 caddies','Boba pearls – 2 caddies']
-  };
+  const specs = [
+    {
+      day: 'THURSDAY',
+      name: 'FRUIT PREP (INITIAL WHEN COMPLETE)',
+      oldNames: ['GARNISH STOCK CHECK (INITIAL WHEN COMPLETE)'],
+      items: ['Limes – 6 boxes','Lemons – 3 boxes','Mint – 5 boxes','Mint sprigs – 2 boxes','Oranges – 3 boxes','Chillies – 1 box']
+    },
+    {
+      day: 'WEDNESDAY',
+      name: "PUREE'S PREP (INITIAL WHEN COMPLETE)",
+      oldNames: ['SYRUPS & JUICES STOCK CHECK (INITIAL WHEN COMPLETE)'],
+      items: ['Lemon – 6 bottles','Lime – 4 bottles','Passion Fruit – 6 bottles','Strawberry – 4 bottles','Solo coffee – 4 bottles']
+    },
+    {
+      day: 'SATURDAY',
+      name: 'FRUIT PREP (INITIAL WHEN COMPLETE)',
+      oldNames: ['FRUIT CADDY STOCK CHECK (INITIAL WHEN COMPLETE)'],
+      items: ['Strawberries – 5 caddies','Grapefruit – 2 caddies','Boba pearls – 2 caddies']
+    }
+  ];
 
   ['odd','even'].forEach(parity => {
     const week = cfg.days && cfg.days[parity];
     if(!week) return;
-    if(week.THURSDAY && !week.THURSDAY.some(s => s.name === garnishSection.name)){
-      insertSectionAfter(week.THURSDAY, 'DAILY CLEANING TASKS', { name: garnishSection.name, items: garnishSection.items.slice() });
+    specs.forEach(spec => {
+      const sections = week[spec.day];
+      if(!sections) return;
+      if(sections.some(s => s.name === spec.name)) return; // already correct, leave as-is
+      const existing = spec.oldNames.map(n => sections.find(s => s.name === n)).find(Boolean);
+      if(existing){
+        existing.name = spec.name;
+      } else {
+        insertSectionAfter(sections, 'DAILY CLEANING TASKS', { name: spec.name, items: spec.items.slice() });
+      }
       changed = true;
-    }
-    if(week.WEDNESDAY && !week.WEDNESDAY.some(s => s.name === syrupSection.name)){
-      insertSectionAfter(week.WEDNESDAY, 'DAILY CLEANING TASKS', { name: syrupSection.name, items: syrupSection.items.slice() });
-      changed = true;
-    }
-    if(week.SATURDAY && !week.SATURDAY.some(s => s.name === caddySection.name)){
-      insertSectionAfter(week.SATURDAY, 'DAILY CLEANING TASKS', { name: caddySection.name, items: caddySection.items.slice() });
-      changed = true;
-    }
+    });
   });
 
   return changed;
