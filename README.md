@@ -1,29 +1,5 @@
 # FOH Tasks — S&L York
 
-[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/slugandlettuceyork/FOH_Tasks)
-
-**Setting up your own copy for a different site?** Click the button
-above. It'll ask you to sign in (or create a free account) with GitHub,
-then automatically makes your own copy of this repo and a linked Netlify
-site for it — no manual repo-linking needed. Once it's deployed:
-
-1. Open the site, go to the **Admin** tab, and change the PIN from the
-   default `4321` first thing.
-2. Edit the task lists, close-down checklist and order sheet products to
-   match your own site — everything's editable from Admin, no code needed.
-3. Set the **week calendar** (an anchor Monday's date + its week number)
-   to match your own odd/even week rota.
-4. If you want your own logo instead of the placeholder one, that's the
-   one thing that does need a small code change — replace the three files
-   in `public/icons/` with your own (192×192, 512×512, and a 180×180
-   `apple-touch-icon`), same filenames.
-
-Each deployed copy gets its own separate, isolated data store
-automatically (Netlify Blobs are scoped per-site) — nothing you enter in
-one site's Admin tab affects any other deployment.
-
----
-
 Front of House daily tasks, cleaning checklist, close-down sign-off and
 order sheet app. Companion app to Kitchen Tasks, same overall approach but
 without the PIN-based role system — staff just tick and initial. A single
