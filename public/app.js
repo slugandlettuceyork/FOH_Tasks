@@ -4,7 +4,7 @@
    tab only (editing task lists, close-down list, order sheet, week anchor).
 */
 
-const APP_VERSION = '2026-09-01.4'; // shown in header; bump this on every deploy so it's obvious a change landed
+const APP_VERSION = '2026-09-01.5'; // shown in header; bump this on every deploy so it's obvious a change landed
 
 const DAY_NAMES = ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'];
 const DAY_SHORT = {MONDAY:'Mon',TUESDAY:'Tue',WEDNESDAY:'Wed',THURSDAY:'Thu',FRIDAY:'Fri',SATURDAY:'Sat',SUNDAY:'Sun'};
@@ -373,6 +373,94 @@ function applyConfigFixesLWC(cfg){
   return changed;
 }
 
+/* Remove the A-Board management section entirely — every day, both weeks. */
+function applyConfigFixesRemoveABoard(cfg){
+  let changed = false;
+  ['odd','even'].forEach(parity => {
+    const week = cfg.days && cfg.days[parity];
+    if(!week) return;
+    Object.keys(week).forEach(dayName => {
+      const sections = week[dayName] || [];
+      const idx = findSectionIndex(sections, 'A-BOARD');
+      if(idx !== -1){
+        sections.splice(idx, 1);
+        changed = true;
+      }
+    });
+  });
+  return changed;
+}
+
+/* "Carslberg order placed" (that's the actual spelling in the live data)
+   moves from Monday to Thursday, both weeks — same approach as the LWC
+   move: strip it from wherever it is, add it into the same-named section
+   on the target day. */
+function applyConfigFixesCarlsberg(cfg){
+  let changed = false;
+  ['odd','even'].forEach(parity => {
+    const week = cfg.days && cfg.days[parity];
+    if(!week || !week.MONDAY || !week.THURSDAY) return;
+    week.MONDAY.forEach(monSection => {
+      const thuSection = week.THURSDAY.find(s => s.name === monSection.name);
+      const remaining = [];
+      monSection.items.forEach(text => {
+        if(/carl?sl?berg/i.test(text)){
+          changed = true;
+          if(thuSection && !hasItemCI(thuSection.items, text)) thuSection.items.push(text);
+        } else {
+          remaining.push(text);
+        }
+      });
+      if(remaining.length !== monSection.items.length) monSection.items = remaining;
+    });
+  });
+  return changed;
+}
+
+function insertSectionAfter(sections, afterNameStartsWith, newSection){
+  const idx = findSectionIndex(sections, afterNameStartsWith);
+  if(idx === -1){ sections.push(newSection); return; }
+  sections.splice(idx + 1, 0, newSection);
+}
+
+/* New stock-check sections, one day each, both weeks — inserted directly
+   under Daily Cleaning Tasks. Left alone on any later run once present,
+   so Admin edits to their wording/items afterwards won't get overwritten. */
+function applyConfigFixesNewStockSections(cfg){
+  let changed = false;
+  const garnishSection = {
+    name: 'GARNISH STOCK CHECK (INITIAL WHEN COMPLETE)',
+    items: ['Limes – 6 boxes','Lemons – 3 boxes','Mint – 5 boxes','Mint sprigs – 2 boxes','Oranges – 3 boxes','Chillies – 1 box']
+  };
+  const syrupSection = {
+    name: 'SYRUPS & JUICES STOCK CHECK (INITIAL WHEN COMPLETE)',
+    items: ['Lemon – 6 bottles','Lime – 4 bottles','Passion Fruit – 6 bottles','Strawberry – 4 bottles','Solo coffee – 4 bottles']
+  };
+  const caddySection = {
+    name: 'FRUIT CADDY STOCK CHECK (INITIAL WHEN COMPLETE)',
+    items: ['Strawberries – 5 caddies','Grapefruit – 2 caddies','Boba pearls – 2 caddies']
+  };
+
+  ['odd','even'].forEach(parity => {
+    const week = cfg.days && cfg.days[parity];
+    if(!week) return;
+    if(week.THURSDAY && !week.THURSDAY.some(s => s.name === garnishSection.name)){
+      insertSectionAfter(week.THURSDAY, 'DAILY CLEANING TASKS', { name: garnishSection.name, items: garnishSection.items.slice() });
+      changed = true;
+    }
+    if(week.WEDNESDAY && !week.WEDNESDAY.some(s => s.name === syrupSection.name)){
+      insertSectionAfter(week.WEDNESDAY, 'DAILY CLEANING TASKS', { name: syrupSection.name, items: syrupSection.items.slice() });
+      changed = true;
+    }
+    if(week.SATURDAY && !week.SATURDAY.some(s => s.name === caddySection.name)){
+      insertSectionAfter(week.SATURDAY, 'DAILY CLEANING TASKS', { name: caddySection.name, items: caddySection.items.slice() });
+      changed = true;
+    }
+  });
+
+  return changed;
+}
+
 async function loadConfig(){
   markStale();
   const remote = await apiGetFresh('config');
@@ -384,7 +472,10 @@ async function loadConfig(){
   }
   const fixed1 = applyConfigFixes(CONFIG);
   const fixed2 = applyConfigFixesLWC(CONFIG);
-  if(fixed1 || fixed2){
+  const fixed3 = applyConfigFixesRemoveABoard(CONFIG);
+  const fixed4 = applyConfigFixesCarlsberg(CONFIG);
+  const fixed5 = applyConfigFixesNewStockSections(CONFIG);
+  if(fixed1 || fixed2 || fixed3 || fixed4 || fixed5){
     await writeNow('config', CONFIG); // persist the correction so it sticks and other devices pick it up
   }
   markSynced();
